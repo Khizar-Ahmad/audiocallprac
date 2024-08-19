@@ -1,0 +1,101 @@
+<!-- public/index.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebRTC Chat Application</title>
+</head>
+<body>
+    <h1>WebRTC Chat Application</h1>
+    <button id="call-button">Start Call</button>
+    <button id="end-button">End Call</button>
+    <audio id="remote-audio" autoplay></audio>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io('/');
+        const roomId = 'roomId123';  // For simplicity, a static room ID is used. You can generate unique room IDs dynamically.
+
+        // Configuration for STUN/TURN servers
+        const configuration = {
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' }
+                // Replace with your TURN server if needed
+                // { urls: 'turn:your_turn_server_url', username: 'your_username', credential: 'your_credential' }
+            ]
+        };
+
+        let localStream;
+        let peerConnection;
+
+        // Join a room on server connection
+        socket.emit('join-room', roomId);
+
+        // Start a call as the local peer
+        document.getElementById('call-button').onclick = async () => {
+            localStream = await navigator.mediaDevices.getUserMedia({ video: false, audio: true });
+
+            peerConnection = new RTCPeerConnection(configuration);
+            peerConnection.addStream(localStream);
+
+            // Handle ICE candidates
+            peerConnection.onicecandidate = ({ candidate }) => {
+                if (candidate) {
+                    socket.emit('ice-candidate', { candidate, roomId });
+                }
+            };
+
+            // Handle incoming media streams
+            peerConnection.ontrack = (event) => {
+                const [remoteStream] = event.streams;
+                document.getElementById('remote-audio').srcObject = remoteStream;
+            };
+
+            // Create an offer and send it to the other peer
+            const offer = await peerConnection.createOffer();
+            await peerConnection.setLocalDescription(offer);
+            socket.emit('offer', { offer, roomId });
+        };
+
+        // Handle incoming offer
+        socket.on('offer', async (offer) => {
+            peerConnection = new RTCPeerConnection(configuration);
+            localStream = await navigator.mediaDevices.getUserMedia({ video: false, audio: true });
+            peerConnection.addStream(localStream);
+
+            peerConnection.onicecandidate = ({ candidate }) => {
+                if (candidate) {
+                    socket.emit('ice-candidate', { candidate, roomId });
+                }
+            };
+
+            peerConnection.ontrack = (event) => {
+                const [remoteStream] = event.streams;
+                document.getElementById('remote-audio').srcObject = remoteStream;
+            };
+
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+            const answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer);
+            socket.emit('answer', { answer, roomId });
+        });
+
+        // Handle incoming answer
+        socket.on('answer', async (answer) => {
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+        });
+
+        // Handle incoming ICE candidates
+        socket.on('ice-candidate', (candidate) => {
+            peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+        });
+
+        // End the call
+        document.getElementById('end-button').onclick = () => {
+            peerConnection.close();
+            peerConnection = null;
+        };
+    </script>
+</body>
+</html>
